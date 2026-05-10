@@ -143,17 +143,17 @@ app.use("/api", apiRouter);
 // Vite / Static serving setup
 async function setupFrontend() {
   const isVercel = !!process.env.VERCEL;
-  if (process.env.NODE_ENV !== "production" && !isVercel) {
+  if (!isVercel && process.env.NODE_ENV !== "production") {
     try {
-      // @ts-ignore
-      const { createServer: createViteServer } = await import("vite");
-      const vite = await createViteServer({
+      // @ts-ignore - dynamic import to avoid bundling issues on production
+      const viteModule = await import("vite");
+      const vite = await viteModule.createServer({
         server: { middlewareMode: true },
         appType: "spa",
       });
       app.use(vite.middlewares);
     } catch (e) {
-      console.error("Vite skip:", e);
+      console.warn("Vite not available, falling back to static files.");
     }
   } else if (!isVercel) {
     const distPath = path.join(process.cwd(), "dist");
