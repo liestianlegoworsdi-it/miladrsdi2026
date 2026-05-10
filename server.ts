@@ -1,83 +1,103 @@
 import express from "express";
 import path from "path";
-import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import { config } from "dotenv";
 
-dotenv.config();
+if (!process.env.VERCEL) {
+  config();
+}
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.json());
 
+// Logger
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`[${req.method}] ${req.url}`);
+  }
+  next();
+});
+
+// Simple CORS
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
+  next();
+});
+
+// Health check (Top level)
+app.get("/api/health", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    env: process.env.NODE_ENV,
+    isVercel: !!process.env.VERCEL
+  });
+});
+
+// Header for versioning/debugging in response
+app.use((req, res, next) => {
+  res.header("X-App-Version", "1.0.1");
+  next();
+});
+
 const apiRouter = express.Router();
 
-// Helper to handle GAS Redirects (GAS always redirects on POST/GET)
+// Helper to handle GAS Redirects
 async function fetchGAS(method: string, body?: any) {
-  // Use the latest URL as fallback
   const url = (process.env.GAS_WEBAPP_URL || "https://script.google.com/macros/s/AKfycbxUC4lDq2OaZEHDmlYsJm1dBlltD6qqm8vbVmTaFtvayDm86z3w6ykaw8y6QkgsERrRbA/exec").trim();
   
   if (!url.startsWith("http")) {
-    throw new Error(`GAS_WEBAPP_URL tidak valid: ${url.substring(0, 20)}...`);
+    throw new Error(`GAS_WEBAPP_URL is missing or invalid.`);
   }
 
   const options: any = {
-    method: method,
-    headers: { 
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
+    method,
+    headers: { 'Content-Type': 'application/json' },
     redirect: 'follow'
   };
   
   if (body) options.body = JSON.stringify(body);
 
-  const urlPreview = url.includes("/s/") ? url.split("/s/")[1].substring(0, 10) : "...";
-  console.log(`[GAS] ${method} -> ${urlPreview}...`);
-  
   try {
     const controller = new AbortController();
-    const timeoutSignal = setTimeout(() => controller.abort(), 12000); // 12 seconds timeout
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
     const response = await fetch(url, { ...options, signal: controller.signal });
-    clearTimeout(timeoutSignal);
+    clearTimeout(timeout);
     
     if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`GAS HTTP Error: ${response.status} - ${errText.substring(0, 100)}`);
+      throw new Error(`GAS HTTP ${response.status}`);
     }
     
     const text = await response.text();
-    
     try {
       return JSON.parse(text);
     } catch (e) {
-      if (text.includes("<!DOCTYPE html>") || text.includes("<html")) {
-        throw new Error("Google Script returned HTML (Deployment issue: ensure it is deployed as 'Web App' and accessible by 'Anyone').");
+      if (text.includes("<!DOCTYPE html>")) {
+        throw new Error("GAS returned HTML. Check 'Anyone' access.");
       }
-      throw new Error(`GAS returned invalid JSON: ${text.substring(0, 100)}...`);
+      throw new Error("GAS returned invalid JSON.");
     }
   } catch (err: any) {
-    if (err.name === 'AbortError') {
-      throw new Error("Google Apps Script timeout (memakan waktu lebih dari 12 detik).");
-    }
-    console.error("[GAS Error]", err.message);
+    if (err.name === 'AbortError') throw new Error("GAS Timeout.");
     throw err;
   }
 }
 
-// Health check
-apiRouter.get("/health", (req, res) => {
-  res.json({ status: "ok", env: process.env.NODE_ENV });
-});
-
 // API Routes
 apiRouter.get("/donations", async (req, res) => {
   try {
-    console.log("Requesting donations...");
     const data = await fetchGAS("GET");
     
     if (!data || !Array.isArray(data)) {
-      throw new Error(`GAS returned invalid data format: ${typeof data}`);
+      console.error("[Backend] Invalid data from GAS:", data);
+      throw new Error(`Invalid GAS response format`);
     }
 
     // Mapping keys from GAS to expected frontend keys
@@ -95,7 +115,7 @@ apiRouter.get("/donations", async (req, res) => {
 
     res.json(mapped);
   } catch (error: any) {
-    console.error("GAS Fetch Error:", error);
+    console.error("API /donations Error:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -120,45 +140,36 @@ apiRouter.delete("/donations/:id", async (req, res) => {
 
 app.use("/api", apiRouter);
 
-// Vite middleware setup
-export async function startServer() {
+// Vite / Static serving setup
+async function setupFrontend() {
   const isVercel = !!process.env.VERCEL;
-  const isProd = process.env.NODE_ENV === "production" || isVercel;
-
-  if (!isProd) {
+  if (process.env.NODE_ENV !== "production" && !isVercel) {
     try {
+      // @ts-ignore
       const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",
       });
       app.use(vite.middlewares);
-      console.log("Vite dev middleware loaded");
     } catch (e) {
-      console.error("Failed to load Vite middleware:", e);
+      console.error("Vite skip:", e);
     }
   } else if (!isVercel) {
-    // Only serve static files manually if NOT on Vercel 
-    // (Vercel has its own optimized static serving)
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+}
 
-  // Only listen if not on Vercel
-  if (!isVercel) {
+// Only listen if not on Vercel
+if (!process.env.VERCEL) {
+  setupFrontend().then(() => {
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running at http://localhost:${PORT}`);
     });
-  }
-}
-
-// Start server
-if (!process.env.VERCEL) {
-  startServer().catch(err => {
-    console.error("Failed to start server:", err);
   });
 }
 
