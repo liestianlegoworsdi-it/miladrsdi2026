@@ -14,8 +14,12 @@ const apiRouter = express.Router();
 // Helper to handle GAS Redirects (GAS always redirects on POST/GET)
 async function fetchGAS(method: string, body?: any) {
   // Use the latest URL as fallback
-  const url = process.env.GAS_WEBAPP_URL || "https://script.google.com/macros/s/AKfycbw177sQ5QuSmLzjmIXi9sNxKp7JuEsqMqelIiOQRlXnggj7D0av1K1Xs1inYF-ZAxECMw/exec";
+  const url = (process.env.GAS_WEBAPP_URL || "https://script.google.com/macros/s/AKfycbxUC4lDq2OaZEHDmlYsJm1dBlltD6qqm8vbVmTaFtvayDm86z3w6ykaw8y6QkgsERrRbA/exec").trim();
   
+  if (!url.startsWith("http")) {
+    throw new Error(`GAS_WEBAPP_URL tidak valid: ${url.substring(0, 20)}...`);
+  }
+
   const options: any = {
     method: method,
     headers: { 
@@ -27,10 +31,15 @@ async function fetchGAS(method: string, body?: any) {
   
   if (body) options.body = JSON.stringify(body);
 
-  console.log(`[GAS] ${method} -> ${url.substring(0, 50)}...`);
+  const urlPreview = url.includes("/s/") ? url.split("/s/")[1].substring(0, 10) : "...";
+  console.log(`[GAS] ${method} -> ${urlPreview}...`);
   
   try {
-    const response = await fetch(url, options);
+    const controller = new AbortController();
+    const timeoutSignal = setTimeout(() => controller.abort(), 12000); // 12 seconds timeout
+
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutSignal);
     
     if (!response.ok) {
       const errText = await response.text();
@@ -43,11 +52,14 @@ async function fetchGAS(method: string, body?: any) {
       return JSON.parse(text);
     } catch (e) {
       if (text.includes("<!DOCTYPE html>") || text.includes("<html")) {
-        throw new Error("Google Script returned HTML (Deployment issue: check 'Anyone' access)");
+        throw new Error("Google Script returned HTML (Deployment issue: ensure it is deployed as 'Web App' and accessible by 'Anyone').");
       }
       throw new Error(`GAS returned invalid JSON: ${text.substring(0, 100)}...`);
     }
   } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error("Google Apps Script timeout (memakan waktu lebih dari 12 detik).");
+    }
     console.error("[GAS Error]", err.message);
     throw err;
   }
