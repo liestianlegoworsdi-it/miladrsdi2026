@@ -1,0 +1,87 @@
+// KODE GOOGLE APPS SCRIPT UNTUK DASHBOARD DONASI VENDOR
+// Pasang kode ini di Extensions > Apps Script pada Spreadsheet Anda.
+
+const SHEET_NAME = "VENDOR";
+
+function doGet(e) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAME);
+    if (!sheet) return createResponse({ error: "Sheet '" + SHEET_NAME + "' tidak ditemukan" });
+    
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const rows = data.slice(1);
+    
+    const result = rows.map(row => {
+      const obj = {};
+      headers.forEach((header, index) => {
+        obj[header] = row[index];
+      });
+      return obj;
+    });
+    
+    return createResponse(result);
+  } catch (err) {
+    return createResponse({ error: err.message });
+  }
+}
+
+function doPost(e) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAME);
+    const body = JSON.parse(e.postData.contents);
+    const action = body.action;
+    
+    if (action === 'delete') {
+      const id = body.id;
+      const data = sheet.getDataRange().getValues();
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0]) === String(id)) {
+          sheet.deleteRow(i + 1);
+          return createResponse({ success: true, message: "Data dihapus" });
+        }
+      }
+      return createResponse({ error: "ID tidak ditemukan" });
+    } 
+    
+    else if (action === 'upsert') {
+      const data = sheet.getDataRange().getValues();
+      const headers = data[0];
+      const rowIndex = data.findIndex((row, index) => index > 0 && String(row[0]) === String(body.id));
+      
+      // Mapping body ke urutan kolom spreadsheet
+      // SESUAI GAMBAR: NO, VENDOR, KONTRIBUSI CB 2025, TARGET, TGL. PROPOSAL, SENT, NILAI KOMITMEN, PAID
+      const rowValues = [
+        body.id,
+        body.vendorName,
+        body.cb2025 || 0,
+        body.targetAmount,
+        body.proposalDate,
+        body.sentDate,
+        body.amount,
+        body.paymentMethod
+      ];
+      
+      if (rowIndex !== -1) {
+        // Update baris yang sudah ada
+        sheet.getRange(rowIndex + 1, 1, 1, rowValues.length).setValues([rowValues]);
+        return createResponse({ success: true, message: "Data diperbarui" });
+      } else {
+        // Tambah baris baru
+        sheet.appendRow(rowValues);
+        return createResponse({ success: true, message: "Data ditambahkan" });
+      }
+    }
+    
+    return createResponse({ error: "Aksi tidak dikenal" });
+  } catch (err) {
+    return createResponse({ error: err.message });
+  }
+}
+
+function createResponse(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
