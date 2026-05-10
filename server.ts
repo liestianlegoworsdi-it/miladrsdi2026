@@ -12,7 +12,7 @@ app.use(express.json());
 
 // Helper to handle GAS Redirects (GAS always redirects on POST/GET)
 async function fetchGAS(method: string, body?: any) {
-  const url = process.env.GAS_WEBAPP_URL;
+  const url = process.env.GAS_WEBAPP_URL || "https://script.google.com/macros/s/AKfycbx5Fd3bV2kSpXr3JCi6eucVBhHB7CivrknQt7tg7Lvl2pDUxT3Cwoi65yzw4QXMq2KVUg/exec";
   if (!url) {
     throw new Error("GAS_WEBAPP_URL is not defined. Please add your Google Apps Script Web App URL to the Secrets/Settings panel.");
   }
@@ -25,7 +25,18 @@ async function fetchGAS(method: string, body?: any) {
   if (body) options.body = JSON.stringify(body);
 
   const response = await fetch(url, options);
-  return await response.json();
+  
+  const contentType = response.headers.get("content-type");
+  if (contentType && contentType.includes("application/json")) {
+    return await response.json();
+  } else {
+    const text = await response.text();
+    // Check if it's a known non-JSON response (like HTML login page or 404)
+    if (text.includes("<!DOCTYPE html>") || text.includes("<html")) {
+      throw new Error("Google Script mengembalikan halaman HTML (mungkin perlu login atau URL salah). Pastikan Web App di-deploy dengan akses 'Anyone'.");
+    }
+    throw new Error(`Google Script mengembalikan respon non-JSON: ${text.substring(0, 50)}...`);
+  }
 }
 
 // API Routes
@@ -72,7 +83,7 @@ app.delete("/api/donations/:id", async (req, res) => {
 });
 
 // Vite middleware setup
-async function startServer() {
+export async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -87,9 +98,17 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running at http://localhost:${PORT}`);
-  });
+  // Only listen if this file is run directly (not imported as a module)
+  if (import.meta.url === `file://${process.argv[1]}` || process.env.NODE_ENV === "development") {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running at http://localhost:${PORT}`);
+    });
+  }
 }
 
-startServer();
+// Start server if not on Vercel (Vercel uses the default export)
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;

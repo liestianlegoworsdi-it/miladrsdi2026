@@ -29,7 +29,6 @@ import {
   Info,
   CheckCircle2,
   Clock,
-  AlertCircle,
   Pencil,
   FileText
 } from 'lucide-react';
@@ -100,6 +99,14 @@ export default function App() {
     try {
       setError(null);
       const res = await fetch('/api/donations');
+      
+      // Better error handling for non-JSON responses
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await res.text();
+        throw new Error(`Respon server bukan JSON. Pastikan backend sudah berjalan dan dikonfigurasi dengan benar. (Received: ${text.substring(0, 20)}...)`);
+      }
+
       const data = await res.json();
       
       if (!res.ok) {
@@ -275,7 +282,7 @@ export default function App() {
 
         <div className="mt-auto pt-6 border-t border-white/5 text-center">
             <p className="text-[10px] text-white/40 font-medium leading-relaxed">
-                @copyright IT.RSDI 2926<br/>
+                @copyright IT.RSDI 2026<br/>
                 Hak Cipta Milik Allah Semata
             </p>
         </div>
