@@ -104,7 +104,7 @@ export default function App() {
       const contentType = res.headers.get("content-type");
       if (!contentType || !contentType.includes("application/json")) {
         const text = await res.text();
-        throw new Error(`Respon server bukan JSON. Pastikan backend sudah berjalan dan dikonfigurasi dengan benar. (Received: ${text.substring(0, 20)}...)`);
+        throw new Error(`Respon server bukan JSON (Status: ${res.status}). (Received: ${text.substring(0, 200)}...)`);
       }
 
       const data = await res.json();
