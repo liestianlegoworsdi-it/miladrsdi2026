@@ -13,36 +13,42 @@ const apiRouter = express.Router();
 
 // Helper to handle GAS Redirects (GAS always redirects on POST/GET)
 async function fetchGAS(method: string, body?: any) {
-  const url = process.env.GAS_WEBAPP_URL || "https://script.google.com/macros/s/AKfycbx5Fd3bV2kSpXr3JCi6eucVBhHB7CivrknQt7tg7Lvl2pDUxT3Cwoi65yzw4QXMq2KVUg/exec";
+  // Use the latest URL as fallback
+  const url = process.env.GAS_WEBAPP_URL || "https://script.google.com/macros/s/AKfycbw177sQ5QuSmLzjmIXi9sNxKp7JuEsqMqelIiOQRlXnggj7D0av1K1Xs1inYF-ZAxECMw/exec";
   
   const options: any = {
     method: method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
     redirect: 'follow'
   };
   
   if (body) options.body = JSON.stringify(body);
 
-  console.log(`[fetchGAS] Method: ${method}, URL: ${url}`);
+  console.log(`[GAS] ${method} -> ${url.substring(0, 50)}...`);
+  
   try {
     const response = await fetch(url, options);
-    console.log(`[fetchGAS] Status: ${response.status}, OK: ${response.ok}`);
     
-    // Some GAS scripts return text/plain or text/html even for JSON success (if there's a redirect issue)
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`GAS HTTP Error: ${response.status} - ${errText.substring(0, 100)}`);
+    }
+    
     const text = await response.text();
-    console.log(`[fetchGAS] Response start: ${text.substring(0, 100)}`);
-
+    
     try {
       return JSON.parse(text);
     } catch (e) {
-      console.error("[fetchGAS] Parsing JSON failed");
       if (text.includes("<!DOCTYPE html>") || text.includes("<html")) {
-        throw new Error("Google Script mengembalikan halaman HTML. Pastikan Web App sudah di-deploy sebagai 'Anyone'.");
+        throw new Error("Google Script returned HTML (Deployment issue: check 'Anyone' access)");
       }
-      throw new Error(`Respon non-JSON dari Google Script: ${text.substring(0, 50)}...`);
+      throw new Error(`GAS returned invalid JSON: ${text.substring(0, 100)}...`);
     }
   } catch (err: any) {
-    console.error("[fetchGAS] Error:", err);
+    console.error("[GAS Error]", err.message);
     throw err;
   }
 }
@@ -104,14 +110,24 @@ app.use("/api", apiRouter);
 
 // Vite middleware setup
 export async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
+  const isVercel = !!process.env.VERCEL;
+  const isProd = process.env.NODE_ENV === "production" || isVercel;
+
+  if (!isProd) {
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+      console.log("Vite dev middleware loaded");
+    } catch (e) {
+      console.error("Failed to load Vite middleware:", e);
+    }
+  } else if (!isVercel) {
+    // Only serve static files manually if NOT on Vercel 
+    // (Vercel has its own optimized static serving)
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
@@ -119,10 +135,12 @@ export async function startServer() {
     });
   }
 
-  // Only listen if this file is run directly (not imported as a module)
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running at http://localhost:${PORT}`);
-  });
+  // Only listen if not on Vercel
+  if (!isVercel) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running at http://localhost:${PORT}`);
+    });
+  }
 }
 
 // Start server
